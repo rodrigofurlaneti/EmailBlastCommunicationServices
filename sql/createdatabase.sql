@@ -1,3 +1,7 @@
+CREATE DATABASE IF NOT EXISTS emailblastdb
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_0900_ai_ci;
+
 USE emailblastdb;
 
 -- 1. Tabela de Sistemas (Quem consome a API)
