@@ -4,3 +4,4 @@
 **/TestResults/
 **/appsettings.Local.json
 *.user
+/deploy/api.env

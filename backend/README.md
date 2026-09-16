@@ -201,7 +201,13 @@ Habilite dead-letter na assinatura para investigar eventos não processados.
 Referências: [envio pelo SDK](https://learn.microsoft.com/en-us/dotnet/api/overview/azure/communication.email-readme)
 e [contrato de eventos](https://learn.microsoft.com/en-us/azure/event-grid/communication-services-email-events).
 
-## Testes
+## Publicação automatizada
+
+O GitHub Actions compila e testa a API antes do deploy por SSH no mesmo servidor
+do CloudShopping, com serviço independente na porta **8201**. Preparação da VM,
+secrets e ativação: [guia de CI/CD](../deploy/README.md).
+
+## Execução dos testes
 
 ```powershell
 dotnet test test/EmailBlastCommunicationServices.UnitTests -c Release

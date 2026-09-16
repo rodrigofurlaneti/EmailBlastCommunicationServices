@@ -1,0 +1,62 @@
+name: CD
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: emailblast-production
+  cancel-in-progress: false
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+  deploy:
+    needs: ci
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+      RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with:
+          name: emailblast-api
+          path: payload/api
+      - name: Configurar conexão SSH verificada
+        env:
+          PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.@-]*$ ]]
+          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]]
+          (( 10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536 ))
+          test -n "$PRIVATE_KEY"
+          test -n "$KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$PRIVATE_KEY" > ~/.ssh/emailblast
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/emailblast ~/.ssh/known_hosts
+          printf 'Host emailblast-vm\n  HostName %s\n  User %s\n  Port %s\n  IdentityFile ~/.ssh/emailblast\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n' "$SSH_HOST" "$SSH_USER" "$SSH_PORT" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+      - name: Publicar API na porta 8201
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$GITHUB_SHA" > payload/api/version.txt
+          tar -czf release.tar.gz -C payload api
+          remote="/tmp/emailblast-$RELEASE_ID"
+          ssh emailblast-vm "umask 077; mkdir '$remote'"
+          scp release.tar.gz deploy/deploy.sh "emailblast-vm:$remote/"
+          ssh emailblast-vm "sudo -n bash '$remote/deploy.sh' '$RELEASE_ID'"
+      - name: Remover chave do runner
+        if: always()
+        run: rm -f ~/.ssh/emailblast ~/.ssh/config
