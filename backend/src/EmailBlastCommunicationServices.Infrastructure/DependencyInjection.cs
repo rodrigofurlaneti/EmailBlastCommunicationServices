@@ -21,6 +21,7 @@ public static class DependencyInjection
             new MySqlServerVersion(Version.Parse(configuration["Database:ServerVersion"] ?? "8.0.0"))));
         services.AddSingleton(_ => new EmailClient(Required(configuration, "COMMUNICATION_SERVICES_CONNECTION_STRING")));
         services.AddScoped<IEmailStore, EmailStore>();
+        services.AddScoped<IEmailOperationStatusReader, AzureEmailOperationStatusReader>();
         services.AddScoped<ISourceSystemRepository, SourceSystemRepository>();
         services.AddScoped<IDeliveryReportTypeRepository, DeliveryReportTypeRepository>();
         services.AddScoped<IEmailLogRepository, EmailLogRepository>();

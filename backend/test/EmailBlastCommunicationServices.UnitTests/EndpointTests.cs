@@ -23,6 +23,7 @@ public class EndpointTests
     private sealed class Factory : WebApplicationFactory<Program>
     {
         public IEmailStore Store { get; } = Substitute.For<IEmailStore>();
+        public IEmailOperationStatusReader OperationReader { get; } = Substitute.For<IEmailOperationStatusReader>();
         protected override void ConfigureWebHost(IWebHostBuilder builder) => builder
             .UseEnvironment("Production")
             .ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
@@ -33,7 +34,59 @@ public class EndpointTests
                 services.AddSingleton(Store);
                 services.RemoveAll<IEmailSender>();
                 services.AddSingleton(Substitute.For<IEmailSender>());
+                services.RemoveAll<IEmailOperationStatusReader>();
+                services.AddSingleton(OperationReader);
             });
+    }
+
+    [Fact]
+    public async Task SwaggerDocumentsSendRequestAndAcceptedResponse()
+    {
+        using var factory = new Factory();
+        using var host = factory.WithWebHostBuilder(builder => builder.UseEnvironment("Development"));
+        using var client = host.CreateClient();
+        var response = await client.GetAsync("/swagger/v1/swagger.json");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var operation = document.RootElement.GetProperty("paths").GetProperty("/api/emails").GetProperty("post");
+        operation.GetProperty("responses").TryGetProperty("202", out _).Should().BeTrue();
+        var example = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("EmailRequest").GetProperty("example");
+        example.GetProperty("systemId").GetInt32().Should().Be(1);
+        (await client.GetAsync("/swagger/index.html")).StatusCode.Should().Be(HttpStatusCode.OK);
+        factory.Store.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OperationStatusUsesAzureIdWithoutSystemIdOrDatabaseAccess()
+    {
+        using var factory = new Factory();
+        const string operationId = "b2a9d5ec-d55d-4d98-8b18-b964ec39c9c1";
+        factory.OperationReader.GetAsync(operationId, Arg.Any<CancellationToken>()).Returns(new ProviderOperationStatus("Succeeded", true));
+        using var client = factory.CreateClient();
+        var response = await client.GetAsync($"/api/emails/operations/{operationId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<EmailOperationStatus>()).Should().Be(new EmailOperationStatus(operationId, "Succeeded", true));
+        factory.Store.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("bad-id")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task InvalidOperationIdDoesNotCallAzure(string id)
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+        (await client.GetAsync($"/api/emails/operations/{id}")).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        factory.OperationReader.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MissingAzureOperationReturns404()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+        (await client.GetAsync($"/api/emails/operations/{Guid.NewGuid()}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]

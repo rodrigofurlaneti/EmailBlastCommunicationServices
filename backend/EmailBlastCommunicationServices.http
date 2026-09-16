@@ -16,3 +16,6 @@ Content-Type: application/json
 
 ### Consulta o status
 GET {{baseUrl}}/api/emails/1?systemId=1
+
+### Consulta direta no Azure (substitua pelo operationId retornado no envio)
+GET {{baseUrl}}/api/emails/operations/b2a9d5ec-d55d-4d98-8b18-b964ec39c9c1

@@ -88,8 +88,11 @@ EmailLogRepository para a inserção da intenção. Não foram adicionadas rotas
 
 1. Em um MySQL 8, execute manualmente `../sql/createdatabase.sql` e depois
    `../sql/002_delivery_report_types.sql`. A API não cria nem altera o banco automaticamente.
-2. Configure as variáveis de ambiente abaixo ou os campos correspondentes em
-   `src/EmailBlastCommunicationServices.Api/appsettings.Local.json` (ignorado pelo Git).
+2. No Visual Studio, clique com o botão direito no projeto Api e escolha
+   **Gerenciar Segredos do Usuário / Manage User Secrets**. Em desenvolvimento,
+   configure `ConnectionStrings:MySql`, `COMMUNICATION_SERVICES_CONNECTION_STRING`
+   e `EventGrid:WebhookKey` nesse arquivo, fora do repositório. Para produção,
+   use as variáveis de ambiente abaixo.
 
 | Variável | Finalidade |
 | --- | --- |
@@ -99,7 +102,9 @@ EmailLogRepository para a inserção da intenção. Não foram adicionadas rotas
 | `Email__SenderAddress` | Remetente de um domínio verificado no Azure |
 | `EventGrid__WebhookKey` | Segredo compartilhado com a assinatura Event Grid |
 
-Não versione credenciais. Variáveis de ambiente prevalecem sobre os arquivos JSON.
+Não versione credenciais. Em Development, User Secrets prevalece sobre appsettings.Local.json;
+variáveis de ambiente prevalecem sobre ambos. User Secrets é armazenamento local de
+desenvolvimento e não criptografa os valores. Reinicie a API após alterar a configuração.
 
 Execute a partir de `backend`:
 
@@ -109,6 +114,17 @@ dotnet run --project src/EmailBlastCommunicationServices.Api --urls http://local
 ```
 
 ## Contratos
+
+### Testar pelo Swagger
+
+No Visual Studio, execute o projeto Api: o navegador abrirá `/swagger` automaticamente.
+Com o perfil atual, a URL é `https://localhost:49781/swagger`.
+Abra **Emails → POST /api/emails → Try it out**, substitua o destinatário do exemplo
+por seu email, informe um SystemId existente e clique em **Execute**.
+Uma resposta 202 indica aceitação pelo Azure. A conexão MySQL, a conexão Azure e o
+SenderAddress precisam estar configurados; o webhook pode ser configurado depois.
+Swagger fica habilitado em Development. Para habilitá-lo em outro ambiente, configure
+`Swagger__Enabled=true`. O documento OpenAPI está em `/swagger/v1/swagger.json`.
 
 `POST /api/emails`
 
@@ -136,6 +152,36 @@ status, OperationId e datas. ID de outro sistema retorna 404; sistema inexistent
 As datas seguem o fuso da sessão MySQL; configure o servidor em UTC para uniformidade.
 
 `GET /health` informa que o processo está ativo; não testa conexões externas.
+
+### Consulta direta da operação no Azure
+
+`GET /api/emails/operations/{operationId}` consulta o ID retornado no envio.
+Não recebe SystemId e não consulta nem modifica o banco; usa as credenciais do
+recurso Azure configurado. Está disponível no Swagger em **Emails**.
+
+```http
+GET /api/emails/operations/b2a9d5ec-d55d-4d98-8b18-b964ec39c9c1
+```
+
+Exemplo de resposta (os valores dependem da consulta):
+
+```json
+{
+  "operationId": "b2a9d5ec-d55d-4d98-8b18-b964ec39c9c1",
+  "operationStatus": "Succeeded",
+  "hasCompleted": true
+}
+```
+
+Estados: NotStarted, Running, Succeeded, Failed e Canceled. A rota atualiza o estado
+uma vez por requisição, sem aguardar a conclusão em loop. Succeeded indica sucesso
+da operação de envio, não confirmação de entrega ao destinatário. Delivered/Bounced
+continuam vindo dos relatórios Event Grid. A consulta não altera o status local.
+ID malformado retorna 400; operação indisponível no Azure retorna 404; falha na
+consulta ao provedor retorna 500. Um status Failed/Canceled da operação retorna 200
+com esse estado, pois a consulta em si foi bem-sucedida. A rota não verifica a
+associação com Systems; mantenha-a disponível somente aos consumidores autorizados
+do recurso Azure, assim como as demais rotas internas do serviço.
 
 ## Event Grid
 
