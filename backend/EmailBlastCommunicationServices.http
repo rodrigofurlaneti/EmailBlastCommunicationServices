@@ -1,0 +1,18 @@
+@baseUrl = http://localhost:5080
+
+### Processo ativo
+GET {{baseUrl}}/health
+
+### Envia um email (requer credenciais e banco configurados)
+POST {{baseUrl}}/api/emails
+Content-Type: application/json
+
+{
+  "systemId": 1,
+  "recipient": "destinatario@example.com",
+  "subject": "Teste",
+  "bodyText": "Olá!"
+}
+
+### Consulta o status
+GET {{baseUrl}}/api/emails/1?systemId=1
