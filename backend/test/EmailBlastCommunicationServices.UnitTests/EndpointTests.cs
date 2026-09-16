@@ -1,3 +1,9 @@
+using EmailBlastCommunicationServices.Api.Mappers.EventGrid;
+using EmailBlastCommunicationServices.Application.Interfaces.Messaging;
+using EmailBlastCommunicationServices.Application.Interfaces.Persistence;
+using EmailBlastCommunicationServices.Application.Contracts.Emails;
+using EmailBlastCommunicationServices.Domain.ValueObjects;
+using EmailBlastCommunicationServices.Infrastructure;
 using System.Net;
 using System.Net.Http.Json;
 using Azure.Communication.Email;
@@ -25,9 +31,22 @@ public class EndpointTests
             {
                 services.RemoveAll<IEmailStore>();
                 services.AddSingleton(Store);
-                services.RemoveAll<EmailClient>();
-                services.AddSingleton(Substitute.For<EmailClient>());
+                services.RemoveAll<IEmailSender>();
+                services.AddSingleton(Substitute.For<IEmailSender>());
             });
+    }
+
+    [Fact]
+    public async Task StatusQueryDoesNotRequireAzureSender()
+    {
+        using var factory = new Factory();
+        factory.Store.SystemExistsAsync(1, Arg.Any<CancellationToken>()).Returns(true);
+        using var host = factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.RemoveAll<IEmailSender>()));
+        using var client = host.CreateClient();
+        var response = await client.GetAsync("/api/emails/1?systemId=1");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        await factory.Store.Received().GetAsync(1, 1, Arg.Any<CancellationToken>());
     }
 
     [Fact]

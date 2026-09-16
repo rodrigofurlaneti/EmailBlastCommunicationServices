@@ -1,7 +1,10 @@
+using EmailBlastCommunicationServices.Application.Interfaces.Persistence;
+using EmailBlastCommunicationServices.Application.Commands.SendEmail;
+using EmailBlastCommunicationServices.Application.Contracts.Emails;
+using EmailBlastCommunicationServices.Infrastructure.Integrations.AzureCommunicationServices;
 using Azure;
 using Azure.Communication.Email;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Xunit;
 
@@ -12,8 +15,8 @@ public class EmailTests
     private static readonly EmailRequest Valid = new(1, "person@example.com", "Assunto", "Texto", null);
     private readonly IEmailStore store = Substitute.For<IEmailStore>();
     private readonly EmailClient client = Substitute.For<EmailClient>();
-    private EmailService Service => new(store, client, new ConfigurationBuilder().AddInMemoryCollection(
-        new Dictionary<string, string?> { ["Email:SenderAddress"] = "sender@example.com" }).Build());
+    private SendEmailHandler Service => new(store, new AzureEmailSender(client, "sender@example.com"));
+    public EmailTests() => store.SystemExistsAsync(1, Arg.Any<CancellationToken>()).Returns(true);
 
     [Fact]
     public void ValidatesRequiredFieldsAndDatabaseLimits()
@@ -38,7 +41,7 @@ public class EmailTests
             .Returns(_ => { order.Add("Sent"); return Task.CompletedTask; });
         var result = await Service.SendAsync(Valid, default);
         order.Should().Equal("Queued", "Azure", "Sent");
-        result.Should().Be(new EmailAccepted(42, "operation-42", "Sent"));
+        result.Email.Should().Be(new EmailAccepted(42, "operation-42", "Sent"));
     }
 
     [Fact]

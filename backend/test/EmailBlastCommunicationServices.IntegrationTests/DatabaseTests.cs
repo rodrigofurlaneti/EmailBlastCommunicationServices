@@ -1,7 +1,11 @@
-using Dapper;
+using EmailBlastCommunicationServices.Infrastructure.Persistence.MySql;
+using Microsoft.EntityFrameworkCore;
+using EmailBlastCommunicationServices.Infrastructure.Persistence.Context;
 using FluentAssertions;
 using MySqlConnector;
 using Xunit;
+using EmailBlastCommunicationServices.Domain.Entities;
+using EmailBlastCommunicationServices.Infrastructure.Persistence.MySql.Repositories;
 
 namespace EmailBlastCommunicationServices.IntegrationTests;
 
@@ -30,11 +34,13 @@ public class DatabaseTests
             foreach (var script in new[] { "createdatabase.sql", "002_delivery_report_types.sql" })
             {
                 var sql = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "sql", script));
-                await admin.ExecuteAsync(sql.Replace("emailblastdb", database, StringComparison.Ordinal));
+                await using var command = new MySqlCommand(sql.Replace("emailblastdb", database, StringComparison.Ordinal), admin);
+                await command.ExecuteNonQueryAsync();
             }
             settings.Database = database;
-            await using var source = new MySqlDataSourceBuilder(settings.ConnectionString).Build();
-            var store = new EmailStore(source);
+            await using var context = new EmailBlastDbContext(new DbContextOptionsBuilder<EmailBlastDbContext>()
+                .UseMySql(settings.ConnectionString, new MySqlServerVersion(new Version(8, 0, 0))).Options);
+            var store = new EmailStore(context);
             (await store.SystemExistsAsync(1, default)).Should().BeTrue();
             (await store.SystemExistsAsync(999, default)).Should().BeFalse();
             var id = await store.QueueAsync(new(1, "a@example.com", "O'Reilly", "Body", null), default);
@@ -53,11 +59,59 @@ public class DatabaseTests
             var failedId = await store.QueueAsync(new(1, "a@example.com", "Failure", null, "<p>Body</p>"), default);
             await store.SetSendResultAsync(failedId, "Failed", null, "Provider failure", default);
             (await store.GetAsync(failedId, 1, default))!.Status.Should().Be("Failed");
+
+            var systems = new SourceSystemRepository(context);
+            var types = new DeliveryReportTypeRepository(context);
+            var logs = new EmailLogRepository(context);
+            var system = new SourceSystem { Name = "Repository test", Description = "Test" };
+            system.Id = await systems.CreateAsync(system, default);
+            (await systems.GetByIdAsync(system.Id, default))!.Name.Should().Be(system.Name);
+            system.Description = "Updated";
+            (await systems.UpdateAsync(system, default)).Should().BeTrue();
+            (await systems.GetByIdAsync(system.Id, default))!.Description.Should().Be("Updated");
+            (await systems.ListAsync(new(0, 100), default)).Should().Contain(s => s.Id == system.Id);
+
+            var type = new DeliveryReportType { StatusName = "CustomTestStatus" };
+            type.Id = await types.CreateAsync(type, default);
+            type.StatusName = "RenamedTestStatus";
+            (await types.UpdateAsync(type, default)).Should().BeTrue();
+            (await types.GetByIdAsync(type.Id, default))!.StatusName.Should().Be(type.StatusName);
+            (await types.ListAsync(new(0, 100), default)).Should().Contain(t => t.Id == type.Id);
+            (await types.DeleteAsync(type.Id, default)).Should().BeTrue();
+            (await types.GetByIdAsync(type.Id, default)).Should().BeNull();
+
+            var log = new EmailLog { SystemId = system.Id, Recipient = "a@example.com", Subject = "CRUD", BodyText = "Text" };
+            log.Id = await logs.CreateAsync(log, default);
+            log = (await logs.GetByIdAsync(new(log.Id, system.Id), default))!;
+            log.CreatedAt.Should().NotBeNull();
+            log.BodyText.Should().Be("Text");
+            (await logs.ListAsync(new(system.Id), default)).Should().ContainSingle();
+            (await logs.GetByIdAsync(new(log.Id, 1), default)).Should().BeNull();
+            (await logs.DeleteAsync(new(log.Id, 1), default)).Should().BeFalse();
+            var wrongScope = new EmailLog { Id = log.Id, SystemId = 1, DeliveryReportTypeId = log.DeliveryReportTypeId,
+                Recipient = log.Recipient, Subject = log.Subject, BodyText = log.BodyText };
+            (await logs.UpdateAsync(wrongScope, default)).Should().BeFalse();
+            log.Subject = "Updated subject";
+            (await logs.UpdateAsync(log, default)).Should().BeTrue();
+            (await logs.GetByIdAsync(new(log.Id, system.Id), default))!.Subject.Should().Be("Updated subject");
+            await Assert.ThrowsAsync<MySqlException>(() => systems.DeleteAsync(system.Id, default));
+            await Assert.ThrowsAsync<MySqlException>(() => types.DeleteAsync(log.DeliveryReportTypeId, default));
+            var queuedId = log.DeliveryReportTypeId;
+            log.DeliveryReportTypeId = (await types.ListAsync(new(), default)).Single(t => t.StatusName == "Sent").Id;
+            log.OperationId = "crud-operation";
+            (await logs.UpdateAsync(log, default)).Should().BeTrue();
+            log.DeliveryReportTypeId = queuedId;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => logs.UpdateAsync(log, default));
+            (await logs.DeleteAsync(new(log.Id, system.Id), default)).Should().BeTrue();
+            (await logs.GetByIdAsync(new(log.Id, system.Id), default)).Should().BeNull();
+            (await systems.DeleteAsync(system.Id, default)).Should().BeTrue();
+            (await systems.GetByIdAsync(system.Id, default)).Should().BeNull();
         }
         finally
         {
             // Only the unique database created by this test can be removed.
-            await admin.ExecuteAsync($"DROP DATABASE IF EXISTS `{database}`");
+            await using var command = new MySqlCommand($"DROP DATABASE IF EXISTS `{database}`", admin);
+            await command.ExecuteNonQueryAsync();
         }
     }
 }

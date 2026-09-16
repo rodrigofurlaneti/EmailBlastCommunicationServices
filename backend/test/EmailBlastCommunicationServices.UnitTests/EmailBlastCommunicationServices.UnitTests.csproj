@@ -13,6 +13,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
-    <ProjectReference Include="../../src/EmailBlastCommunicationServices/EmailBlastCommunicationServices.csproj" />
+    <ProjectReference Include="../../src/EmailBlastCommunicationServices.Api/EmailBlastCommunicationServices.Api.csproj" />
   </ItemGroup>
 </Project>

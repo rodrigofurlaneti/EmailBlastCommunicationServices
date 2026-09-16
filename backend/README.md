@@ -1,18 +1,100 @@
 # EmailBlastCommunicationServices
 
-Microserviço .NET 9 / Minimal API, Azure.Communication.Email 1.1.0, Dapper e MySqlConnector.
+Microserviço .NET 9 / Minimal API, Azure.Communication.Email 1.1.0 e EF Core 9 com MySQL/Pomelo.
 Um destinatário por solicitação, compatível com o modelo de EmailLogs existente.
+
+## Arquitetura
+
+A solução contém quatro projetos com responsabilidades e dependências explícitas:
+
+- **Domain**: validação do conteúdo e regras de transição dos status de entrega, sem dependências externas.
+- **Application**: DTOs, interfaces IEmailStore/IEmailSender e casos de uso de envio, consulta e processamento de relatórios. Depende apenas de Domain.
+- **Infrastructure**: DbContext, mapeamentos Fluent API, repositórios EF Core e integração Azure Communication Services.
+- **Api**: composição, endpoints HTTP, autenticação do webhook e interpretação do contrato Event Grid. Usa Application e registra Infrastructure.
+
+A validação de SystemId e a coordenação Queued → Sent/Failed ocorrem na Application.
+As transições de entrega são definidas no Domain e aplicadas pela Infrastructure sob
+atualizações condicionais e controle de concorrência, impedindo regressões com webhooks concorrentes.
+O esquema SQL foi preservado. Datas nulas no banco agora são representadas como null também no DTO de status.
+
+### Organização das pastas
+
+```text
+src/
+├── EmailBlastCommunicationServices.Domain/
+│   ├── Entities/                      # SourceSystem, DeliveryReportType, EmailLog
+│   ├── Interfaces/                    # Contratos de repositório das entidades
+│   │   └── Base/                      # ICrudRepository<TEntity, TKey, TQuery>
+│   ├── Queries/                       # Escopo e paginação das consultas
+│   ├── Rules/                         # Validação e transições de entrega
+│   └── ValueObjects/                  # DeliveryReport
+├── EmailBlastCommunicationServices.Application/
+│   ├── Interfaces/
+│   │   ├── Messaging/                 # IEmailSender
+│   │   └── Persistence/               # IEmailStore: porta do fluxo de envio
+│   ├── Contracts/Emails/              # DTOs de entrada e saída
+│   ├── Commands/
+│   │   ├── SendEmail/                 # Handler e resultado do envio
+│   │   └── ProcessDeliveryReports/    # Processamento de entregas
+│   └── Queries/GetEmail/              # Handler e resultado da consulta
+├── EmailBlastCommunicationServices.Infrastructure/
+│   ├── Integrations/AzureCommunicationServices/
+│   ├── Persistence/Context/            # EmailBlastDbContext e DbSets
+│   ├── Persistence/Configurations/     # Mapeamentos IEntityTypeConfiguration
+│   ├── Persistence/MySql/Repositories/ # Implementações CRUD das três entidades
+│   └── DependencyInjection.cs
+└── EmailBlastCommunicationServices.Api/
+    ├── Contracts/EventGrid/
+    ├── Endpoints/Emails/
+    ├── Endpoints/EventGrid/
+    ├── Mappers/EventGrid/
+    ├── Properties/
+    └── Program.cs
+```
+
+Os namespaces acompanham as pastas. Commands e Queries separam os casos de uso;
+os handlers são chamados diretamente, sem dependência de MediatR.
+As regras genéricas de direção de dependências do AGENTS.md são verificadas pelos
+testes de arquitetura. A persistência utiliza EF Core/Pomelo conforme a orientação
+atual; a identificação continua por SystemId conforme o contrato do microserviço.
+
+`Domain/Entities` representa todas as colunas das tabelas: `SourceSystem` corresponde
+a `Systems` (o nome evita conflito com o namespace .NET `System`), `DeliveryReportType`
+a `DeliveryReportTypes` e `EmailLog` a `EmailLogs`. Nomes de propriedades correspondem
+às colunas mapeadas nas configurações do EF Core. Campos SQL nullable, inclusive os DATETIME
+sem NOT NULL, usam tipos anuláveis. IDs estrangeiros permanecem como inteiros;
+as entidades não dependem de atributos de ORM. Os DTOs HTTP continuam separados
+das entidades, evitando expor corpo e detalhes internos do log na consulta de status.
+
+No Domain, os contratos `ISourceSystemRepository`, `IDeliveryReportTypeRepository` e
+`IEmailLogRepository` herdam os métodos CreateAsync, GetByIdAsync, ListAsync,
+UpdateAsync e DeleteAsync de `Interfaces/Base/ICrudRepository`. Os parâmetros
+genéricos definem entidade, chave e consulta paginada. Para logs, EmailLogKey e
+EmailLogQuery exigem SystemId. Esses tipos também pertencem ao Domain e não dependem
+dos DTOs da Application. As implementações SourceSystemRepository,
+DeliveryReportTypeRepository e EmailLogRepository ficam em
+`Infrastructure/Persistence/MySql/Repositories` e são registradas em AddInfrastructure.
+Todas usam EmailBlastDbContext, LINQ e CancellationToken. Inserts usam SaveChangesAsync
+e retornam o ID preenchido pelo EF Core. Atualizações em lote usam ExecuteUpdateAsync
+e exclusões usam ExecuteDeleteAsync, que persistem imediatamente. Atualizações individuais
+de logs usam SaveChangesAsync com tokens de concorrência para status e OperationId.
+Listagens aceitam de 1 a 1000 registros por página. Datas são administradas pelo MySQL.
+Exclusões são físicas; as chaves estrangeiras impedem remover sistemas e status em uso.
+Logs são criados como Queued; atualizações respeitam as transições de status e não
+alteram o conteúdo ou OperationId após o processamento. O fluxo de envio reutiliza
+EmailLogRepository para a inserção da intenção. Não foram adicionadas rotas administrativas.
 
 ## Configuração
 
 1. Em um MySQL 8, execute manualmente `../sql/createdatabase.sql` e depois
    `../sql/002_delivery_report_types.sql`. A API não cria nem altera o banco automaticamente.
 2. Configure as variáveis de ambiente abaixo ou os campos correspondentes em
-   `src/EmailBlastCommunicationServices/appsettings.Local.json` (ignorado pelo Git).
+   `src/EmailBlastCommunicationServices.Api/appsettings.Local.json` (ignorado pelo Git).
 
 | Variável | Finalidade |
 | --- | --- |
 | `ConnectionStrings__MySql` | Conexão MySQL com o banco emailblastdb |
+| `Database__ServerVersion` | Versão MySQL usada pelo provider; padrão 8.0.0, sem conexão automática para detecção |
 | `COMMUNICATION_SERVICES_CONNECTION_STRING` | Credencial do recurso Azure Communication Services |
 | `Email__SenderAddress` | Remetente de um domínio verificado no Azure |
 | `EventGrid__WebhookKey` | Segredo compartilhado com a assinatura Event Grid |
@@ -23,7 +105,7 @@ Execute a partir de `backend`:
 
 ```powershell
 dotnet build src/EmailBlastCommunicationServices.sln -c Release
-dotnet run --project src/EmailBlastCommunicationServices --urls http://localhost:5080
+dotnet run --project src/EmailBlastCommunicationServices.Api --urls http://localhost:5080
 ```
 
 ## Contratos
@@ -43,7 +125,7 @@ dotnet run --project src/EmailBlastCommunicationServices --urls http://localhost
 Pelo menos um corpo é obrigatório. Assunto e destinatário: até 255 caracteres.
 Cada corpo: até 65535 bytes UTF-8, conforme a coluna MySQL TEXT.
 SystemId deve existir em Systems. Dados inválidos retornam 400.
-O fluxo insere Queued e obtém LAST_INSERT_ID antes de chamar o Azure.
+O fluxo salva Queued com SaveChangesAsync e obtém o ID gerado antes de chamar o Azure.
 Retorna 202 com `{ "id": 1, "operationId": "...", "status": "Sent" }` e Location.
 Sent significa que a solicitação foi aceita pelo SDK; a entrega é confirmada pelo webhook.
 Uma exceção de envio grava Failed e retorna erro 500 sem detalhes internos.
@@ -78,6 +160,7 @@ e [contrato de eventos](https://learn.microsoft.com/en-us/azure/event-grid/commu
 ```powershell
 dotnet test test/EmailBlastCommunicationServices.UnitTests -c Release
 dotnet test test/EmailBlastCommunicationServices.IntegrationTests -c Release
+dotnet test test/EmailBlastCommunicationServices.ArchTests -c Release
 ```
 
 Unitários e testes HTTP em memória usam substitutos do EmailClient e da persistência;

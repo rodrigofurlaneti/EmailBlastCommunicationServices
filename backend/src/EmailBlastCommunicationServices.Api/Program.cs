@@ -1,0 +1,21 @@
+using EmailBlastCommunicationServices.Api.Endpoints.Emails;
+using EmailBlastCommunicationServices.Api.Endpoints.EventGrid;
+using EmailBlastCommunicationServices.Application.Commands.ProcessDeliveryReports;
+using EmailBlastCommunicationServices.Application.Commands.SendEmail;
+using EmailBlastCommunicationServices.Application.Queries.GetEmail;
+using EmailBlastCommunicationServices.Infrastructure;
+var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true).AddEnvironmentVariables();
+builder.Services.AddProblemDetails();
+builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddScoped<SendEmailHandler>();
+builder.Services.AddScoped<GetEmailHandler>();
+builder.Services.AddScoped<ProcessDeliveryReportsHandler>();
+var app = builder.Build();
+app.UseExceptionHandler();
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapEmailEndpoints();
+app.MapEventGridEndpoints();
+app.Run();
+
+public partial class Program;
