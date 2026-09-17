@@ -2,13 +2,14 @@
 Description=EmailBlast Communication Services API
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/opt/emailblast-api/current/EmailBlastCommunicationServices.Api.dll
 
 [Service]
 Type=simple
-User=root
-Group=root
-WorkingDirectory=/home/rodrigomadeira31/EmailBlastCommunicationServices/backend/src/EmailBlastCommunicationServices.Api
-ExecStart=/usr/bin/dotnet /home/rodrigomadeira31/EmailBlastCommunicationServices/backend/src/EmailBlastCommunicationServices.Api/bin/Release/net9.0/EmailBlastCommunicationServices.Api.dll
+User=emailblast
+Group=emailblast
+WorkingDirectory=/opt/emailblast-api/current
+ExecStart=/usr/bin/dotnet /opt/emailblast-api/current/EmailBlastCommunicationServices.Api.dll --urls=http://127.0.0.1:5201
 EnvironmentFile=/etc/emailblast/api.env
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=ASPNETCORE_URLS=http://127.0.0.1:5201
@@ -18,7 +19,7 @@ TimeoutStopSec=30
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

@@ -1,16 +1,21 @@
-name: CD
+﻿name: CD
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 concurrency:
   group: emailblast-production
   cancel-in-progress: false
+
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+
   deploy:
     needs: ci
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
@@ -18,45 +23,86 @@ jobs:
     environment: production
     timeout-minutes: 15
     env:
+      APP: emailblast
+      API_SERVICE: emailblast-api.service
+      API_ENTRY_FILE: EmailBlastCommunicationServices.Api.dll
+      API_PORT: "5201"
+      PUBLIC_API_PORT: "8201"
+      API_HEALTH_PATH: /health
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
       SSH_PORT: ${{ vars.SSH_PORT || '22' }}
-      RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
     steps:
       - uses: actions/checkout@v5
+
+      - name: Validar configuracao
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$API_HEALTH_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
+            echo '::error::Configure API_HEALTH_PATH com a rota real de saude da API (resposta HTTP 2xx).'
+            exit 1
+          fi
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.@-]*$ ]]
+          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]]
+          (( 10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536 ))
+          test -n "$API_SERVICE" || { echo '::error::Configure API_SERVICE com o nome real da unidade systemd do EmailBlast.'; exit 1; }
+          test -n "$API_ENTRY_FILE" || { echo '::error::Configure API_ENTRY_FILE com o nome real do arquivo principal da API.'; exit 1; }
+          [[ "$API_SERVICE" =~ ^[a-zA-Z0-9_.@-]+\.service$ && "$API_SERVICE" != -* ]]
+          [[ "$API_ENTRY_FILE" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ ]]
+
       - uses: actions/download-artifact@v6
         with:
           name: emailblast-api
-          path: payload/api
-      - name: Configurar conexão SSH verificada
+          path: backend-publish
+
+      - name: Configurar conexao SSH verificada
         env:
           PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-          [[ "$SSH_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.@-]*$ ]]
-          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]]
-          (( 10#$SSH_PORT > 0 && 10#$SSH_PORT < 65536 ))
           test -n "$PRIVATE_KEY"
           test -n "$KNOWN_HOSTS"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$PRIVATE_KEY" > ~/.ssh/emailblast
-          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/emailblast ~/.ssh/known_hosts
-          printf 'Host emailblast-vm\n  HostName %s\n  User %s\n  Port %s\n  IdentityFile ~/.ssh/emailblast\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n' "$SSH_HOST" "$SSH_USER" "$SSH_PORT" > ~/.ssh/config
-          chmod 600 ~/.ssh/config
-      - name: Publicar API na porta 8201
+          install -d -m 700 "$HOME/.ssh"
+          umask 077
+          printf '%s\n' "$PRIVATE_KEY" > "$HOME/.ssh/deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf 'Host production-vm\n  HostName %s\n  User %s\n  Port %s\n  IdentityFile ~/.ssh/deploy\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n' "$SSH_HOST" "$SSH_USER" "$SSH_PORT" > "$HOME/.ssh/config"
+
+      - name: Preparar publicacao da API
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "$GITHUB_SHA" > payload/api/version.txt
-          tar -czf release.tar.gz -C payload api
-          remote="/tmp/emailblast-$RELEASE_ID"
-          ssh emailblast-vm "umask 077; mkdir '$remote'"
-          scp release.tar.gz deploy/deploy.sh "emailblast-vm:$remote/"
-          ssh emailblast-vm "sudo -n bash '$remote/deploy.sh' '$RELEASE_ID'"
-      - name: Remover chave do runner
+          test -s "backend-publish/$API_ENTRY_FILE"
+          printf '%s\n' "$GITHUB_SHA" > backend-publish/version.txt
+          tar -czf backend.tar.gz -C backend-publish .
+          RELEASE="$(date -u +%Y%m%d%H%M%S)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -n --arg release "$RELEASE" --arg service "$API_SERVICE" \
+            --arg entry "$API_ENTRY_FILE" --arg health "$API_HEALTH_PATH" \
+            '{release:$release,service:$service,entry:$entry,health:$health}' > deploy-config.json
+          cp deploy/deploy.sh deploy.sh
+          bash -n deploy.sh
+
+      - name: Transferir e publicar
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage=$(ssh production-vm 'mktemp -d /tmp/emailblast-deploy.XXXXXXXXXX')
+          [[ "$stage" =~ ^/tmp/emailblast-deploy\.[a-zA-Z0-9]+$ ]]
+          # stage foi validado; a expansao local destes caminhos e intencional.
+          # shellcheck disable=SC2029
+          cleanup() { ssh production-vm "rm -f -- '$stage/backend.tar.gz' '$stage/deploy.sh' '$stage/deploy-config.json'; rmdir -- '$stage'" || true; }
+          trap cleanup EXIT
+          scp backend.tar.gz deploy.sh deploy-config.json "production-vm:$stage/"
+          # shellcheck disable=SC2029
+          ssh production-vm "sudo -n bash '$stage/deploy.sh' '$stage'"
+          printf 'EmailBlast publicado. Commit %s. API publica 8201; interna 5201. Sem backups.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Limpar chave do runner
         if: always()
-        run: rm -f ~/.ssh/emailblast ~/.ssh/config
+        shell: bash
+        run: rm -f -- "$HOME/.ssh/deploy" "$HOME/.ssh/config" "$HOME/.ssh/known_hosts"
