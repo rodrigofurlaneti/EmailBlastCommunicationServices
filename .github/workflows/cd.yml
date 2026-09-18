@@ -28,6 +28,7 @@ jobs:
       API_ENTRY_FILE: EmailBlastCommunicationServices.Api.dll
       API_PORT: "5201"
       PUBLIC_API_PORT: "8201"
+      PUBLIC_API_SCHEME: ${{ vars.PUBLIC_API_SCHEME || 'http' }}
       API_HEALTH_PATH: /health
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
@@ -40,6 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$PUBLIC_API_SCHEME" == http || "$PUBLIC_API_SCHEME" == https ]]
           if [[ ! "$API_HEALTH_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
             echo '::error::Configure API_HEALTH_PATH com a rota real de saude da API (resposta HTTP 2xx).'
             exit 1
@@ -83,7 +85,8 @@ jobs:
           RELEASE="$(date -u +%Y%m%d%H%M%S)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           jq -n --arg release "$RELEASE" --arg service "$API_SERVICE" \
             --arg entry "$API_ENTRY_FILE" --arg health "$API_HEALTH_PATH" \
-            '{release:$release,service:$service,entry:$entry,health:$health}' > deploy-config.json
+            --arg publicScheme "$PUBLIC_API_SCHEME" \
+            '{release:$release,service:$service,entry:$entry,health:$health,publicScheme:$publicScheme}' > deploy-config.json
           cp deploy/deploy.sh deploy.sh
           bash -n deploy.sh
 

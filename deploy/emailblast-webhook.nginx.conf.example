@@ -1,0 +1,24 @@
+# Substitui o site HTTP emailblast existente na porta 8201.
+# Instalar somente depois de emitir certificado publico para 191.234.174.58.
+# Confirmar os caminhos com certbot certificates antes de habilitar.
+server {
+    listen 8201 ssl default_server;
+    server_name 191.234.174.58;
+
+    ssl_certificate /etc/letsencrypt/live/191.234.174.58/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/191.234.174.58/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    access_log /var/log/nginx/emailblast-access.log;
+    error_log /var/log/nginx/emailblast-error.log;
+
+    location / {
+        proxy_pass http://127.0.0.1:5201;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+}

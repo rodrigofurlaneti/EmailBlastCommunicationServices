@@ -75,8 +75,9 @@ projetos; este pacote nao altera sudoers. DLL, servico e /health estao fixos no 
 
 Nao abre firewall/NSG automaticamente. Para acesso externo, liberar 8201 somente
 das origens autorizadas; nao liberar 5201. As rotas de envio nao possuem autenticacao
-forte; nao expor irrestritamente a Internet. Event Grid requer HTTPS: dominio e
-certificado precisam ser configurados separadamente.
+forte; nao expor irrestritamente a Internet. Event Grid requer HTTPS. Siga
+[HTTPS.md](HTTPS.md) para migrar 191.234.174.58:8201 para HTTPS com certificado
+publico para o IP e configurar PUBLIC_API_SCHEME=https no CD.
 
 Depois de preparar servidor, banco e configuracao, definir `DEPLOY_ENABLED=true`
 em Variables do REPOSITORIO (nao Secrets). Actions -> CD -> Run workflow -> main.

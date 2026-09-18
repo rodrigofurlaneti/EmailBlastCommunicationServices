@@ -11,12 +11,17 @@ release=$(jq -er .release "$stage/deploy-config.json")
 service=$(jq -er .service "$stage/deploy-config.json")
 entry=$(jq -er .entry "$stage/deploy-config.json")
 health=$(jq -er .health "$stage/deploy-config.json")
+public_scheme=$(jq -er '.publicScheme // "http"' "$stage/deploy-config.json")
 [[ "$release" =~ ^[0-9]{14}-[0-9]+-[0-9]+$ ]]
 [[ "$service" == emailblast-api.service ]]
 [[ "$entry" == EmailBlastCommunicationServices.Api.dll ]]
 [[ "$health" == /health ]]
+[[ "$public_scheme" == http || "$public_scheme" == https ]]
 internal_url="http://127.0.0.1:5201$health"
 public_url="http://127.0.0.1:8201$health"
+if [[ "$public_scheme" == https ]]; then
+  public_url="https://191.234.174.58:8201$health"
+fi
 trap 'echo "Falha na linha $LINENO. Verifique preparacao do servidor, servico, portas e health check." >&2' ERR
 
 # Configuracoes ficam fora dos artefatos; nao imprimir seus valores.
@@ -72,7 +77,8 @@ fi
 check_url() {
   local code
   code=$(curl --silent --show-error --output /dev/null --connect-timeout 5 \
-    --max-time 10 --write-out '%{http_code}' "$1") || return 1
+    --max-time 10 --write-out '%{http_code}' --noproxy '*' \
+    --connect-to '191.234.174.58:8201:127.0.0.1:8201' "$1") || return 1
   [[ "$code" =~ ^2[0-9][0-9]$ ]]
 }
 if [[ -n "$old" ]]; then
